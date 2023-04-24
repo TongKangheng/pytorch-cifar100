@@ -32,6 +32,11 @@ def get_network(args):
     elif args.net == 'vgg19':
         from models.vgg import vgg19_bn
         net = vgg19_bn()
+        if args.tbp:
+            for i in [6, 13, 26, 39, 52]:
+                net.features[i]=MaxPool2dK2S2()
+            for i in [25, 29, 32, 35, 38, 42, 45, 48, 51][-3:]:
+                net.features[i]=ReLU_SiLU()
     elif args.net == 'densenet121':
         from models.densenet import densenet121
         net = densenet121()
@@ -68,6 +73,11 @@ def get_network(args):
     elif args.net == 'resnet50':
         from models.resnet import resnet50
         net = resnet50()
+        if args.tbp:
+            for i in range(1,6):
+                net.conv4_x[i].relu=ReLU_SiLU()
+            for i in range(3):
+                net.conv5_x[i].relu=ReLU_SiLU()
     elif args.net == 'resnet101':
         from models.resnet import resnet101
         net = resnet101()
@@ -306,3 +316,99 @@ def best_acc_weights(weights_folder):
 
     best_files = sorted(best_files, key=lambda w: int(re.search(regex_str, w).groups()[1]))
     return best_files[-1]
+
+class MaxPool2dK2S2Function(Function):
+    temperture=1.
+    @staticmethod
+    def forward(ctx, input_):
+        with torch.no_grad():
+            output=F.max_pool2d(input_, 2, 2)
+        ctx.save_for_backward(input_, output)
+        return output.to(input_.device)
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        with torch.no_grad():
+            input_, output = ctx.saved_tensors
+            input_unfold = F.unfold(input_, 2, stride=2).reshape((input_.shape[0],input_.shape[1],2*2,grad_output.shape[2]*grad_output.shape[3]))
+            
+            # output_unfold=torch.exp(10*output.reshape(output.shape[0],output.shape[1],1,-1).repeat(1,1,9,1))
+            output_unfold = torch.exp(MaxPool2dK2S2Function.temperture*input_unfold).sum(dim=2, keepdim=True)
+            
+            grad_output_unfold=grad_output.reshape(output.shape[0],output.shape[1],1,-1).repeat(1,1,4,1)
+            grad_input_unfold=grad_output_unfold*torch.exp(MaxPool2dK2S2Function.temperture*input_unfold)/output_unfold
+            grad_input_unfold=grad_input_unfold.reshape(input_.shape[0],-1,output.shape[2]*output.shape[3])
+            grad_input=F.fold(grad_input_unfold, input_.shape[2:], 2, stride=2)
+            return grad_input.to(input_.device)
+
+
+class MaxPool2dK2S2(nn.Module):
+    def __init__(self):
+        super(MaxPool2dK2S2, self).__init__()
+
+    def forward(self, input):
+        return MaxPool2dK2S2Function.apply(input)
+
+class MaxPool2dK3S2P1Function(Function):
+    temperture=10.
+    @staticmethod
+    def forward(ctx, input_):
+        with torch.no_grad():
+            output=F.max_pool2d(input_, 3, 2, 1)
+        ctx.save_for_backward(input_, output)
+        return output.to(input_.device)
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        with torch.no_grad():
+            input_, output = ctx.saved_tensors
+            input_unfold = F.unfold(input_, 3, padding=1, stride=2).reshape((input_.shape[0],input_.shape[1],3*3,grad_output.shape[2]*grad_output.shape[3]))
+            
+            # output_unfold=torch.exp(10*output.reshape(output.shape[0],output.shape[1],1,-1).repeat(1,1,9,1))
+            output_unfold = torch.exp(MaxPool2dK3S2P1Function.temperture*input_unfold).sum(dim=2, keepdim=True)
+            
+            grad_output_unfold=grad_output.reshape(output.shape[0],output.shape[1],1,-1).repeat(1,1,9,1)
+            grad_input_unfold=grad_output_unfold*torch.exp(MaxPool2dK3S2P1Function.temperture*input_unfold)/output_unfold
+            grad_input_unfold=grad_input_unfold.reshape(input_.shape[0],-1,output.shape[2]*output.shape[3])
+            grad_input=F.fold(grad_input_unfold, input_.shape[2:], 3, padding=1, stride=2)
+            return grad_input.to(input_.device)
+
+
+class MaxPool2dK3S2P1(nn.Module):
+    def __init__(self):
+        super(MaxPool2dK3S2P1, self).__init__()
+
+    def forward(self, input):
+        return MaxPool2dK3S2P1Function.apply(input)
+
+class ReLU_SiLU_Function(Function):
+
+    @staticmethod
+    def forward(ctx, input_):
+        # 在forward中，需要定义MyReLU这个运算的forward计算过程
+        # 同时可以保存任何在后向传播中需要使用的变量值
+        with torch.no_grad():
+            output = torch.relu(input_)
+        ctx.save_for_backward(input_)
+        return output.to(input_.device)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # 根据BP算法的推导（链式法则），dloss / dx = (dloss / doutput) * (doutput / dx)
+        # dloss / doutput就是输入的参数grad_output、
+        # 因此只需求relu的导数，在乘以grad_output
+        input_, = ctx.saved_tensors
+        with torch.no_grad():
+            grad_input = input_ * \
+                torch.sigmoid(input_)*(1-torch.sigmoid(input_)) + \
+                torch.sigmoid(input_)
+            grad_input = grad_input * grad_output
+        return grad_input.to(input_.device)
+
+
+class ReLU_SiLU(nn.Module):
+    def __init__(self):
+        super(ReLU_SiLU, self).__init__()
+
+    def forward(self, input):
+        return ReLU_SiLU_Function.apply(input)

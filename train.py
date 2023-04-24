@@ -125,6 +125,7 @@ if __name__ == '__main__':
     parser.add_argument('-warm', type=int, default=1, help='warm up training phase')
     parser.add_argument('-lr', type=float, default=0.1, help='initial learning rate')
     parser.add_argument('-resume', action='store_true', default=False, help='resume training')
+    parser.add_argument('-tbp', action='store_true', default=False, help='if use better TBP')
     args = parser.parse_args()
 
     net = get_network(args)
